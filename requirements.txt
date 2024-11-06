@@ -3,4 +3,6 @@ numpy
 psycopg2-binary
 torch
 scikit-learn
-matplotlib 
+matplotlib
+sqlalchemy>=1.4.0
+colorama>=0.4.6 
