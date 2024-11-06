@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from dataclasses import asdict
 import json
+from typing import List, Dict
 
 # 현재 스크립트의 디렉토리를 파이썬 경로에 추가
 current_dir = Path(__file__).resolve().parent
@@ -83,6 +84,82 @@ def get_data_from_db(timeframe: str) -> pd.DataFrame:
         logger.error(f"데이터 로드 중 상세 오류: {str(e)}")
         raise
 
+def save_trade_history_to_excel(trades: List[Dict], results: Dict, save_path: str = 'trade_history.xlsx'):
+    """백테스트 결과를 엑셀 파일로 저장"""
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # 거래 내역을 데이터프레임으로 변환
+        trades_df = pd.DataFrame(trades)
+        
+        # 타임스탬프 변환 (타임존 제거)
+        trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp']).dt.tz_localize(None)
+        
+        # 거래 유형 한글화
+        trades_df['type'] = trades_df['type'].map({
+            'enter_long': '롱 진입',
+            'enter_short': '숏 진입',
+            'exit': '청산'
+        })
+        
+        # 컬럼 순서 및 이름 정리
+        trades_df = trades_df.rename(columns={
+            'timestamp': '시간',
+            'type': '거래유형',
+            'price': '가격',
+            'size': '수량',
+            'leverage': '레버리지',
+            'fee': '수수료',
+            'pnl': '손익',
+            'capital': '자본금',
+            'return_pct': '수익률'
+        })
+        
+        # 엑셀 작성
+        with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
+            # 거래 내역 시트
+            trades_df.to_excel(writer, sheet_name='거래내역', index=False)
+            
+            # 요약 통계 시트
+            summary_data = {
+                '항목': [
+                    '초기자본', '최종자본', '총 수익률', '총 거래횟수', 
+                    '롱 거래수', '숏 거래수', '승률', '총 손익', 
+                    '총 수수료', '평균 수익률', '최대 손실폭', '레버리지'
+                ],
+                '값': [
+                    f"${results['initial_capital']:,.2f}",
+                    f"${results['final_capital']:,.2f}",
+                    f"{results['total_return']:.2f}%",
+                    results['num_trades'],
+                    results['num_long_trades'],
+                    results['num_short_trades'],
+                    f"{results['win_rate']:.2f}%",
+                    f"${results['total_pnl']:,.2f}",
+                    f"${results['total_fees']:,.2f}",
+                    f"{results['avg_return_per_trade']:.2f}%",
+                    f"{results['max_drawdown']:.2f}%",
+                    results['leverage_used']
+                ]
+            }
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='요약', index=False)
+            
+            # 월별 성과 시트
+            if len(trades_df) > 0:
+                trades_df['월'] = trades_df['시간'].dt.strftime('%Y-%m')
+                monthly_stats = trades_df[trades_df['거래유형'] == '청산'].groupby('월').agg({
+                    '손익': 'sum',
+                    '수익률': ['mean', 'count'],
+                    '수수료': 'sum'
+                }).round(2)
+                monthly_stats.columns = ['총손익', '평균수익률', '거래횟수', '총수수료']
+                monthly_stats.to_excel(writer, sheet_name='월별성과')
+        
+        logger.info(f"\n거래 내역이 {save_path}에 저장되었습니다.")
+        
+    except Exception as e:
+        logger.error(f"거래 내역 저장 중 오류 발생: {str(e)}")
+
 def run_backtest_analysis(optimize: bool = True):
     logger = setup_logging()
     
@@ -139,6 +216,9 @@ def run_backtest_analysis(optimize: bool = True):
         
         # 멀티 타임프레임 데이터로 백테스트 실행
         results = backtest.run(dfs, strategy)
+        
+        # 거래 내역 엑셀 저장
+        save_trade_history_to_excel(backtest.trades, results)
         
         # 거래 내역 출력
         if len(backtest.trades) > 0:
